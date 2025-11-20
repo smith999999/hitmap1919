@@ -1,9 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-# import FinMind only for utility/naming, no longer for daily stock data
-# from FinMind.data import DataLoader 
-import yfinance as yf # 導入新的數據源
+import yfinance as yf 
 import datetime
 import time
 
@@ -12,11 +10,9 @@ st.set_page_config(page_title="台灣 50 熱力圖", layout="wide")
 st.title("🏆 台灣 50 (0050) 成分股熱力圖 (YFinance 穩定版)")
 st.caption("數據來源: YFinance (解決 FinMind 限制問題) | 數據將優先完整顯示。")
 
-# FinMind DataLoader 已不再用於獲取每日股價，所以不需要初始化
+# --- 核心數據結構 (保持不變) ---
 
-# --- 核心數據結構 (為配合 YFinance 格式，略作調整) ---
-
-# 1. 實際發行股數 (Issued Shares, 單位: 百萬股/仟張) - 保持不變
+# 1. 實際發行股數 (Issued Shares, 單位: 百萬股/仟張) 
 ISSUED_SHARES_MAP = {
     '2330': 25930, '2317': 13863, '2454': 1598, '2303': 12964, '3711': 4349, '2881': 14920,
     '2882': 13627, '2886': 13735, '2002': 15734, '1301': 9534, '1303': 7943, '2412': 9718,
@@ -89,7 +85,7 @@ def load_latest_data_yf(yf_stock_list):
         return df_all_data
         
     except Exception as e:
-        st.error(f"❌ YFinance 批量抓取報價數據時發生錯誤，將嘗試載入上次成功資料。錯誤詳情: {e}")
+        # st.error(f"❌ YFinance 批量抓取報價數據時發生錯誤。錯誤詳情: {e}")
         status_text.empty()
         return pd.DataFrame()
 
@@ -112,35 +108,40 @@ def fetch_market_data(yf_stock_list, tw_codes, current_time):
             shares_count = ISSUED_SHARES_MAP.get(stock_id, 1.0) 
             stock_info = STOCK_INFO_MAP.get(stock_id, {"Name": stock_id, "Sector": "未分類"})
             
-            # 從 YFinance 獲取單檔股票的數據
-            if ('Close', yf_code) in df_all_data.columns:
-                df_stock_close = df_all_data['Close'][yf_code].dropna()
-                df_stock_prev = df_all_data['Adj Close'][yf_code].dropna() # 調整收盤價通常用於計算漲跌
+            # --- 核心修正點：使用 .loc 存取 MultiIndex 中的單一序列 ---
+            try:
+                # 獲取單檔股票的 Close 價格序列
+                df_stock_close = df_all_data.loc[:, ('Close', yf_code)].dropna()
+                # 獲取單檔股票的 Adj Close 價格序列（用於計算漲跌幅）
+                df_stock_prev = df_all_data.loc[:, ('Adj Close', yf_code)].dropna() 
+            except KeyError:
+                # 該股票在 YFinance 中沒有數據，則跳過
+                continue
 
-                if len(df_stock_close) >= 1:
-                    try:
-                        current_price = df_stock_close.iloc[-1]
-                        
-                        actual_market_cap = current_price * shares_count 
-                        
-                        change_pct = 0.0
-                        if len(df_stock_prev) >= 2:
-                            prev_close = df_stock_prev.iloc[-2]
-                            if prev_close > 0:
-                                # 使用最後一個 Close 計算漲跌幅
-                                change_pct = ((current_price - prev_close) / prev_close) * 100
-                        
-                        processed_data.append({
-                            "Code": stock_id,
-                            "Name": stock_info['Name'],
-                            "Sector": stock_info['Sector'],
-                            "Size": actual_market_cap,
-                            "Price": current_price,
-                            "ChangePct": round(change_pct, 2),
-                            "LabelInfo": f"{stock_info['Name']}<br>{current_price:.2f} ({round(change_pct, 2)}%)"
-                        })
-                    except Exception:
-                        continue # 數據不完整則跳過
+            if len(df_stock_close) >= 1:
+                try:
+                    current_price = df_stock_close.iloc[-1]
+                    
+                    actual_market_cap = current_price * shares_count 
+                    
+                    change_pct = 0.0
+                    if len(df_stock_prev) >= 2:
+                        prev_close = df_stock_prev.iloc[-2]
+                        if prev_close > 0:
+                            # 使用最後一個 Close 計算漲跌幅
+                            change_pct = ((current_price - prev_close) / prev_close) * 100
+                    
+                    processed_data.append({
+                        "Code": stock_id,
+                        "Name": stock_info['Name'],
+                        "Sector": stock_info['Sector'],
+                        "Size": actual_market_cap,
+                        "Price": current_price,
+                        "ChangePct": round(change_pct, 2),
+                        "LabelInfo": f"{stock_info['Name']}<br>{current_price:.2f} ({round(change_pct, 2)}%)"
+                    })
+                except Exception:
+                    continue # 數據不完整則跳過
         
         df_result = pd.DataFrame(processed_data)
         # 成功後儲存到 session state 作為備援
@@ -172,7 +173,7 @@ if not df.empty:
     
     missing_stocks = len(STATIC_TW_CODES) - len(df)
     if missing_stocks > 0 and 'last_successful_data' in st.session_state:
-        st.error(f"❌ 最新數據僅抓取到 {len(df)} 檔股票數據，但已成功載入 {len(st.session_state['last_successful_data'])} 檔備援數據。")
+        st.error(f"❌ 最新數據僅抓取到 {len(df)} 檔股票數據，但已成功載入 {len(st.session_state.get('last_successful_data', []))} 檔備援數據。")
     elif missing_stocks == 0:
          st.success(f"✅ 成功顯示 {len(df)} 檔股票數據。")
          
