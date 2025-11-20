@@ -7,10 +7,13 @@ import time
 
 # 1. 網頁基本設定
 st.set_page_config(page_title="台灣 50 熱力圖", layout="wide")
-st.title("🏆 台灣 50 (0050) 成分股熱力圖 (批量穩定版)")
-st.caption("數據來源: FinMind Open Data | 採用單次批量抓取，提高數據穩定性。")
+st.title("🏆 台灣 50 (0050) 成分股熱力圖 (實際市值版)")
+# 修正標題，避免誤會仍在自動抓取成分股
+st.caption("數據來源: FinMind Open Data | 比例基於發行股數計算實際市值。")
 
-dl = DataLoader() 
+# *** 修正點 1：設定 DataLoader 的 timeout 時間為 30 秒，避免抓取大量數據時超時 ***
+# 預設可能是 10 秒，增加到 30 秒能提高成功率
+dl = DataLoader(timeout=30) 
 
 # --- 核心數據結構 (保持不變) ---
 
@@ -57,51 +60,40 @@ STOCK_CLASSIFICATION = {
     '2812': {'Name': '台灣大', 'Sector': '電信服務'}, '8454': {'Name': '富邦媒', 'Sector': '電子商務'},
 }
 
-STOCK_INFO_MAP = {k: v for k, v in STOCK_CLASSIFICATION.items()}
 STATIC_TOP_50_CODES = list(ISSUED_SHARES_MAP.keys())
 
+
+# --- 核心函數 (保持不變) ---
 
 @st.cache_data(ttl=3600)
 def fetch_market_data(stock_list):
     """
-    *** 核心修正：將 50 次 API 請求合併為 1 次批量請求，提高成功率和效率 ***
+    批量抓取股價並計算漲跌
     """
     end_date = datetime.date.today().strftime("%Y-%m-%d")
-    # 只需要前兩天的數據來計算漲跌幅
     start_date = (datetime.date.today() - datetime.timedelta(days=7)).strftime("%Y-%m-%d")
     
+    all_data = []
+    
+    progress_bar = st.progress(0)
     status_text = st.empty()
-    status_text.text(f"正在向 FinMind 請求 {len(stock_list)} 檔股票的最新數據...")
-    
-    try:
-        # 1. 單次批量抓取所有股票的數據
-        df_all_data = dl.taiwan_stock_daily(
-            stock_id=stock_list,  # 傳入整個列表
-            start_date=start_date,
-            end_date=end_date
-        )
-    except Exception as e:
-        st.error(f"❌ 批量抓取報價數據時發生致命錯誤。請檢查網路連線或 FinMind 狀態: {e}")
-        status_text.empty()
-        return pd.DataFrame()
+    total_stocks = len(stock_list)
 
-    if df_all_data.empty:
-        status_text.empty()
-        return pd.DataFrame()
-    
-    status_text.text("✅ 數據已接收，正在計算市值和漲跌幅...")
-
-    # 2. 對批量數據進行後續處理和計算
-    processed_data = []
-
-    for stock_id in stock_list:
-        df_stock = df_all_data[df_all_data['stock_id'] == stock_id].sort_values('date')
-        
-        stock_info = STOCK_INFO_MAP.get(stock_id, {"Name": stock_id, "Sector": "未分類"})
+    for i, stock_id in enumerate(stock_list):
+        stock_info = STOCK_CLASSIFICATION.get(stock_id, {"Name": stock_id, "Sector": "未分類"})
         shares_count = ISSUED_SHARES_MAP.get(stock_id, 1.0) 
-
-        if not df_stock.empty and len(df_stock) >= 1:
-            try:
+        
+        status_text.text(f"正在分析: {stock_id} {stock_info['Name']} ({i+1}/{total_stocks})")
+        
+        try:
+            # 由於已經增加 timeout，這裡抓取的成功率應該會大幅提高
+            df_stock = dl.taiwan_stock_daily(
+                stock_id=stock_id,
+                start_date=start_date,
+                end_date=end_date
+            )
+            
+            if not df_stock.empty:
                 latest = df_stock.iloc[-1]
                 current_price = latest['close']
                 
@@ -113,7 +105,7 @@ def fetch_market_data(stock_list):
                     if prev_close > 0:
                         change_pct = ((current_price - prev_close) / prev_close) * 100
                 
-                processed_data.append({
+                all_data.append({
                     "Code": stock_id,
                     "Name": stock_info['Name'],
                     "Sector": stock_info['Sector'],
@@ -122,19 +114,24 @@ def fetch_market_data(stock_list):
                     "ChangePct": round(change_pct, 2),
                     "LabelInfo": f"{stock_info['Name']}<br>{current_price} ({round(change_pct, 2)}%)"
                 })
-            except Exception:
-                # 數據雖然在批量抓取中，但可能格式有問題或缺失，跳過
-                continue
-    
+        
+        except Exception as e:
+            # 這裡可以捕獲錯誤，以便了解是哪隻股票抓取失敗
+            # st.error(f"Error fetching {stock_id}: {e}")
+            pass
+            
+        progress_bar.progress((i + 1) / total_stocks)
+
+    progress_bar.empty()
     status_text.empty()
-    return pd.DataFrame(processed_data)
+    
+    return pd.DataFrame(all_data)
 
 # --- 主程式邏輯 ---
 
 st.info(f"✅ 已載入 {len(STATIC_TOP_50_CODES)} 檔成分股，正在獲取最新報價並計算實際市值...")
 
 if st.button("強制刷新報價"):
-    # 清除快取，確保重新發送 API 請求
     st.cache_data.clear()
 
 df = fetch_market_data(STATIC_TOP_50_CODES)
@@ -167,4 +164,4 @@ if not df.empty:
     with st.expander("查看詳細數據表"):
         st.dataframe(df[['Code', 'Name', 'Sector', 'Price', 'ChangePct', 'Size']].sort_values('Size', ascending=False).rename(columns={'Size': '實際市值(百萬)'}))
 else:
-    st.warning("⚠️ 警告：無法獲取完整的報價資料。如果問題持續，可能是 FinMind API 服務暫時不穩定。")
+    st.warning("⚠️ 警告：無法獲取報價資料，請檢查是否為休市時間或 FinMind API 異常。")
