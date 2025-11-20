@@ -8,7 +8,7 @@ import time
 # 1. 網頁基本設定
 st.set_page_config(page_title="台灣 50 熱力圖", layout="wide")
 st.title("🏆 台灣 50 (0050) 成分股熱力圖 (YFinance 穩定版)")
-st.caption("數據來源: YFinance (解決 FinMind 限制問題) | 數據將優先完整顯示。")
+st.caption("數據來源: YFinance (縮短抓取範圍，提高穩定性)。")
 
 # --- 核心數據結構 (保持不變) ---
 
@@ -65,7 +65,8 @@ def load_latest_data_yf(yf_stock_list):
     使用 YFinance 批量抓取數據，並轉換成適合的格式。
     """
     end_date = datetime.date.today()
-    start_date = end_date - datetime.timedelta(days=7) # 抓取一周數據確保能計算昨收
+    # *** 修正點：縮短抓取範圍到 3 天以提高網路穩定性 ***
+    start_date = end_date - datetime.timedelta(days=3) 
 
     status_text = st.empty()
     status_text.text(f"🚀 正在向 YFinance 請求 {len(yf_stock_list)} 檔股票的最新數據...")
@@ -108,14 +109,11 @@ def fetch_market_data(yf_stock_list, tw_codes, current_time):
             shares_count = ISSUED_SHARES_MAP.get(stock_id, 1.0) 
             stock_info = STOCK_INFO_MAP.get(stock_id, {"Name": stock_id, "Sector": "未分類"})
             
-            # --- 核心修正點：使用 .loc 存取 MultiIndex 中的單一序列 ---
+            # 使用 .loc 存取 MultiIndex 中的單一序列
             try:
-                # 獲取單檔股票的 Close 價格序列
                 df_stock_close = df_all_data.loc[:, ('Close', yf_code)].dropna()
-                # 獲取單檔股票的 Adj Close 價格序列（用於計算漲跌幅）
                 df_stock_prev = df_all_data.loc[:, ('Adj Close', yf_code)].dropna() 
             except KeyError:
-                # 該股票在 YFinance 中沒有數據，則跳過
                 continue
 
             if len(df_stock_close) >= 1:
@@ -128,7 +126,6 @@ def fetch_market_data(yf_stock_list, tw_codes, current_time):
                     if len(df_stock_prev) >= 2:
                         prev_close = df_stock_prev.iloc[-2]
                         if prev_close > 0:
-                            # 使用最後一個 Close 計算漲跌幅
                             change_pct = ((current_price - prev_close) / prev_close) * 100
                     
                     processed_data.append({
@@ -141,7 +138,7 @@ def fetch_market_data(yf_stock_list, tw_codes, current_time):
                         "LabelInfo": f"{stock_info['Name']}<br>{current_price:.2f} ({round(change_pct, 2)}%)"
                     })
                 except Exception:
-                    continue # 數據不完整則跳過
+                    continue 
         
         df_result = pd.DataFrame(processed_data)
         # 成功後儲存到 session state 作為備援
@@ -172,10 +169,14 @@ df = fetch_market_data(YF_STOCK_CODES, STATIC_TW_CODES, st.session_state['cache_
 if not df.empty:
     
     missing_stocks = len(STATIC_TW_CODES) - len(df)
-    if missing_stocks > 0 and 'last_successful_data' in st.session_state:
-        st.error(f"❌ 最新數據僅抓取到 {len(df)} 檔股票數據，但已成功載入 {len(st.session_state.get('last_successful_data', []))} 檔備援數據。")
+    
+    # 檢查是否使用備援數據
+    if 'last_successful_data' in st.session_state and df.equals(st.session_state['last_successful_data']):
+        st.warning(f"⚠️ 正在顯示上次成功獲取（非最新）的 {len(df)} 檔股票數據。")
     elif missing_stocks == 0:
          st.success(f"✅ 成功顯示 {len(df)} 檔股票數據。")
+    elif missing_stocks > 0:
+         st.error(f"❌ 僅抓取到 {len(df)} 檔股票數據，缺失 {missing_stocks} 檔。")
          
     # 確保 size 不為 0，避免 Treemap 崩潰
     df = df[df['Size'] > 0] 
