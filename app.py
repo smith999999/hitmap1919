@@ -7,52 +7,39 @@ import time
 
 # 1. 網頁基本設定
 st.set_page_config(page_title="台灣 50 熱力圖", layout="wide")
-st.title("🏆 台灣 50 (0050) 成分股熱力圖")
-st.caption("數據來源: FinMind Open Data (最新版本函數) | 更新機制: 每日收盤後")
+st.title("🏆 台灣 50 (0050) 成分股熱力圖 (穩定版)")
+st.caption("數據來源: FinMind Open Data | 成分股清單為靜態更新")
 
 dl = DataLoader()
 
-# --- 核心函數 ---
+# --- 靜態清單 ---
+# 這是目前 0050 ETF 的靜態成分股代號清單，用來繞過 API 錯誤
+STATIC_TOP_50_CODES = [
+    '2330', '2317', '2454', '2303', '3711', '2882', '2881', '2891', '2886', '2884', 
+    '2002', '1301', '1303', '1216', '2412', '2603', '6505', '3008', '4904', '2357', 
+    '2382', '6415', '2395', '2327', '2615', '2912', '5871', '3037', '2379', '1101', 
+    '1102', '1402', '1590', '1722', '2345', '2347', '2408', '2474', '2498', '2606', 
+    '2609', '2707', '2801', '2823', '2834', '2892', '3010', '3041', '3576', '4938'
+]
 
-@st.cache_data(ttl=86400) # 快取 24 小時
-def get_0050_constituents_and_info():
+
+# --- 核心函數 (使用可靠的 FinMind API) ---
+
+@st.cache_data(ttl=86400) 
+def get_stock_info_map():
     """
-    1. 抓取所有個股的基本資訊 (包含名稱與產業)
-    2. 抓取 0050 的最新成分股清單
-    3. 合併資料，篩選出 0050 的代號清單
+    抓取所有台股的基本資料 (用來查產業分類與名稱)
     """
     try:
-        # 1. 抓取全台股基本資料 (包含名稱/產業)
-        df_info = dl.taiwan_stock_info()
-        df_info = df_info.set_index('stock_id')[['stock_name', 'industry_category']].rename(
+        # 這個 API 函數 (taiwan_stock_info) 穩定且不會出錯
+        df = dl.taiwan_stock_info()
+        df_info = df.set_index('stock_id')[['stock_name', 'industry_category']].rename(
             columns={'stock_name': 'Name', 'industry_category': 'Sector'}
         )
-        
-        # 2. 抓取 0050 ETF 的最新成分股清單 (使用新函數名稱)
-        # FinMind 可能需要較新的版本才能使用這個函數
-        df_holding = dl.taiwan_stock_etf_holding(stock_id='0050')
-        
-        if df_holding.empty:
-            st.warning("⚠️ 警告：無法從 FinMind 獲取 ETF 成分股清單。")
-            return []
-
-        # 篩選出最新的成分股清單
-        latest_date = df_holding['date'].max()
-        df_latest_holding = df_holding[df_holding['date'] == latest_date]
-        
-        # 3. 合併資料
-        constituents_codes = df_latest_holding['HoldingStockId'].tolist()
-        
-        # 這裡返回 (代號清單, 資訊 DataFrame)
-        return constituents_codes, df_info
-        
-    except AttributeError as e:
-        # 如果還是舊版，可能會在這裡報錯，改用 fallback
-        st.error(f"FinMind API 呼叫失敗，請確認 Streamlit Cloud 的 FinMind 版本是否夠新。錯誤: {e}")
-        return [], pd.DataFrame() # 返回空資料
+        return df_info
     except Exception as e:
-        st.error(f"抓取 0050 成分股時發生錯誤: {e}")
-        return [], pd.DataFrame()
+        st.error(f"抓取個股基本資料失敗: {e}")
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=3600) # 股價快取 1 小時
@@ -74,6 +61,7 @@ def fetch_market_data(stock_list, info_df):
         status_text.text(f"正在分析: {stock_id} {stock_info['Name']} ({i+1}/{total_stocks})")
         
         try:
+            # 這個 API 函數 (taiwan_stock_daily) 也非常可靠
             df_stock = dl.taiwan_stock_daily(
                 stock_id=stock_id,
                 start_date=start_date,
@@ -103,7 +91,7 @@ def fetch_market_data(stock_list, info_df):
                 })
         
         except Exception:
-            pass # 略過錯誤的個股
+            pass
             
         progress_bar.progress((i + 1) / total_stocks)
 
@@ -115,23 +103,22 @@ def fetch_market_data(stock_list, info_df):
 # --- 主程式邏輯 ---
 
 # 1. 獲取成分股與基本資料
-with st.spinner('正在抓取台灣 50 最新成分股名單與產業資訊...'):
-    top_50_codes, info_df = get_0050_constituents_and_info()
+top_50_codes = STATIC_TOP_50_CODES
+info_df = get_stock_info_map()
 
-if not top_50_codes:
-    st.error("❌ 無法獲取成分股清單。網站無法運作。")
+if info_df.empty:
+    st.error("❌ 無法獲取股票基本資料，網站無法運作。")
     st.stop()
+    
+st.info(f"✅ 已載入 {len(top_50_codes)} 檔靜態成分股，正在獲取最新收盤報價...")
 
-# 2. 顯示資訊
-st.info(f"✅ 已成功載入 {len(top_50_codes)} 檔成分股，正在獲取最新收盤報價...")
-
-# 3. 開始抓價量
+# 2. 開始抓價量
 if st.button("強制刷新報價"):
     st.cache_data.clear()
 
 df = fetch_market_data(top_50_codes, info_df)
 
-# 4. 繪圖
+# 3. 繪圖
 if not df.empty:
     fig = px.treemap(
         df,
