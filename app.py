@@ -7,8 +7,8 @@ import time
 
 # 1. 網頁基本設定
 st.set_page_config(page_title="台灣 50 熱力圖", layout="wide")
-st.title("🏆 台灣 50 (0050) 成分股熱力圖 (YFinance 穩定版)")
-st.caption("數據來源: YFinance (縮短抓取範圍，提高穩定性)。")
+st.title("🏆 台灣 50 (0050) 成分股熱力圖 (YFinance 分批穩定版)")
+st.caption("數據來源: YFinance (分批抓取 50 檔股票，極大化成功率)。")
 
 # --- 核心數據結構 (保持不變) ---
 
@@ -59,36 +59,58 @@ STATIC_TW_CODES = list(ISSUED_SHARES_MAP.keys())
 YF_STOCK_CODES = [f"{code}.TW" for code in STATIC_TW_CODES]
 
 
-# --- 獨立函數：使用 yfinance 批量抓取 ---
+# --- 輔助函數：將列表分割成較小的塊 ---
+def chunks(lst, n):
+    """將列表lst分割成大小為n的塊"""
+    for i in range(0, len(lst), n):
+        yield lst[i:i + n]
+
+
+# --- 獨立函數：使用 yfinance 分批批量抓取 ---
 def load_latest_data_yf(yf_stock_list):
     """
-    使用 YFinance 批量抓取數據，並轉換成適合的格式。
+    使用 YFinance 分批批量抓取數據，並合併結果。
     """
     end_date = datetime.date.today()
-    # *** 修正點：縮短抓取範圍到 3 天以提高網路穩定性 ***
-    start_date = end_date - datetime.timedelta(days=3) 
+    start_date = end_date - datetime.timedelta(days=3) # 抓取 3 天數據
+
+    all_downloaded_data = []
+    chunk_size = 10 # 每批次抓取 10 檔股票
 
     status_text = st.empty()
-    status_text.text(f"🚀 正在向 YFinance 請求 {len(yf_stock_list)} 檔股票的最新數據...")
     
-    try:
-        # YFinance 批量抓取數據
-        df_all_data = yf.download(
-            tickers=yf_stock_list,
-            start=start_date.strftime("%Y-%m-%d"),
-            end=end_date.strftime("%Y-%m-%d"),
-            interval="1d",
-            progress=False
-        )
+    for i, stock_chunk in enumerate(chunks(yf_stock_list, chunk_size)):
+        chunk_name = f"第 {i+1} 批 ({len(stock_chunk)} 檔)"
+        status_text.text(f"🚀 正在請求 {chunk_name} 數據...")
         
-        status_text.text("✅ 數據已接收，正在計算市值和漲跌幅...")
-        status_text.empty()
-        return df_all_data
-        
-    except Exception as e:
-        # st.error(f"❌ YFinance 批量抓取報價數據時發生錯誤。錯誤詳情: {e}")
-        status_text.empty()
+        try:
+            # YFinance 批量抓取數據
+            df_chunk = yf.download(
+                tickers=stock_chunk,
+                start=start_date.strftime("%Y-%m-%d"),
+                end=end_date.strftime("%Y-%m-%d"),
+                interval="1d",
+                progress=False
+            )
+            
+            if not df_chunk.empty:
+                all_downloaded_data.append(df_chunk)
+            
+        except Exception:
+            # 即使某一批失敗，也不影響其他批次的數據
+            st.warning(f"⚠️ 請求 {chunk_name} 數據失敗，已跳過。")
+            continue
+
+    status_text.empty()
+    
+    if not all_downloaded_data:
         return pd.DataFrame()
+        
+    # 合併所有成功的批次數據
+    # pandas.concat 會根據 Date (Index) 和 MultiIndex 欄位 (Attribute, Ticker) 自動合併
+    df_all_data = pd.concat(all_downloaded_data, axis=1)
+    
+    return df_all_data
 
 
 # --- 主數據處理函數：包含快取邏輯 ---
