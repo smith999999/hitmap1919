@@ -1,5 +1,5 @@
 streamlit
 pandas
 plotly
-FinMind==1.3.11
+FinMind>=1.3.11
 tqdm
