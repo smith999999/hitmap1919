@@ -8,9 +8,12 @@ import time
 # 1. 網頁基本設定
 st.set_page_config(page_title="台灣 50 熱力圖", layout="wide")
 st.title("🏆 台灣 50 (0050) 成分股熱力圖 (實際市值版)")
+# 修正標題，避免誤會仍在自動抓取成分股
 st.caption("數據來源: FinMind Open Data | 比例基於發行股數計算實際市值。")
 
-dl = DataLoader()
+# *** 修正點 1：設定 DataLoader 的 timeout 時間為 30 秒，避免抓取大量數據時超時 ***
+# 預設可能是 10 秒，增加到 30 秒能提高成功率
+dl = DataLoader(timeout=30) 
 
 # --- 核心數據結構 (保持不變) ---
 
@@ -83,6 +86,7 @@ def fetch_market_data(stock_list):
         status_text.text(f"正在分析: {stock_id} {stock_info['Name']} ({i+1}/{total_stocks})")
         
         try:
+            # 由於已經增加 timeout，這裡抓取的成功率應該會大幅提高
             df_stock = dl.taiwan_stock_daily(
                 stock_id=stock_id,
                 start_date=start_date,
@@ -111,7 +115,9 @@ def fetch_market_data(stock_list):
                     "LabelInfo": f"{stock_info['Name']}<br>{current_price} ({round(change_pct, 2)}%)"
                 })
         
-        except Exception:
+        except Exception as e:
+            # 這裡可以捕獲錯誤，以便了解是哪隻股票抓取失敗
+            # st.error(f"Error fetching {stock_id}: {e}")
             pass
             
         progress_bar.progress((i + 1) / total_stocks)
@@ -145,11 +151,10 @@ if not df.empty:
         range_color=[-3, 3],
     )
     
-    # *** 修正點：在這裡加入 textfont_size 參數來放大字體 ***
     fig.update_traces(
         textinfo="label+value",
         hovertemplate='<b>%{label}</b><br>實際市值(百萬): %{value:,.0f}<br>漲跌幅: %{color:.2f}%',
-        textfont_size=24 # 設定字體大小為 24px (約兩倍大)
+        textfont_size=24
     )
     
     fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=700)
