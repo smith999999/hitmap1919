@@ -8,6 +8,7 @@ import time
 # 1. 網頁基本設定
 st.set_page_config(page_title="台灣 50 熱力圖", layout="wide")
 st.title("🏆 台灣 50 (0050) 成分股熱力圖 (快取備援版)")
+# 確保標題修正，避免誤導
 st.caption("數據來源: FinMind Open Data | 失敗時將自動顯示上次成功抓取的資料。")
 
 dl = DataLoader() 
@@ -61,7 +62,7 @@ STOCK_INFO_MAP = {k: v for k, v in STOCK_CLASSIFICATION.items()}
 STATIC_TOP_50_CODES = list(ISSUED_SHARES_MAP.keys())
 
 
-# --- 新增函數：單純負責呼叫 API，處理錯誤 ---
+# --- 獨立函數：單純負責呼叫 API，處理錯誤 ---
 def load_latest_data(stock_list):
     """
     僅負責向 FinMind 批量請求數據，若失敗則回報錯誤。
@@ -77,6 +78,7 @@ def load_latest_data(stock_list):
         )
         return df_all_data
     except Exception as e:
+        # 顯示錯誤，但返回空 DataFrame
         st.error(f"❌ 批量抓取最新報價數據時發生錯誤，將嘗試載入上次成功資料。錯誤詳情: {e}")
         return pd.DataFrame()
 
@@ -85,63 +87,58 @@ def load_latest_data(stock_list):
 @st.cache_data(ttl=3600)
 def fetch_market_data(stock_list, current_time): 
     """
-    嘗試載入最新數據。如果失敗，則利用 Streamlit 快取機制，返回上一次成功的結果。
-    current_time 參數確保只有在點擊按鈕時才會刷新快取。
+    嘗試載入最新數據。如果失敗，則從 st.session_state 載入上一次成功的結果。
     """
     # 1. 嘗試載入最新數據
     df_all_data = load_latest_data(stock_list)
     
-    # 2. 判斷是否成功
-    if df_all_data.empty:
-        # 如果最新的數據是空的 (API 呼叫失敗)，則依賴快取機制返回舊數據
+    # 2. 數據處理 (如果成功獲取新數據)
+    if not df_all_data.empty:
+        processed_data = []
+
+        for stock_id in stock_list:
+            df_stock = df_all_data[df_all_data['stock_id'] == stock_id].sort_values('date')
+            
+            stock_info = STOCK_INFO_MAP.get(stock_id, {"Name": stock_id, "Sector": "未分類"})
+            shares_count = ISSUED_SHARES_MAP.get(stock_id, 1.0) 
+
+            if not df_stock.empty and len(df_stock) >= 1:
+                try:
+                    latest = df_stock.iloc[-1]
+                    current_price = latest['close']
+                    
+                    actual_market_cap = current_price * shares_count 
+                    
+                    change_pct = 0.0
+                    if len(df_stock) >= 2:
+                        prev_close = df_stock.iloc[-2]['close']
+                        if prev_close > 0:
+                            change_pct = ((current_price - prev_close) / prev_close) * 100
+                    
+                    processed_data.append({
+                        "Code": stock_id,
+                        "Name": stock_info['Name'],
+                        "Sector": stock_info['Sector'],
+                        "Size": actual_market_cap,
+                        "Price": current_price,
+                        "ChangePct": round(change_pct, 2),
+                        "LabelInfo": f"{stock_info['Name']}<br>{current_price} ({round(change_pct, 2)}%)"
+                    })
+                except Exception:
+                    continue
+        
+        df_result = pd.DataFrame(processed_data)
+        # 成功後儲存到 session state 作為備援
+        st.session_state['last_successful_data'] = df_result
+        return df_result
+    
+    # 3. 數據備援 (如果 API 抓取失敗)
+    elif 'last_successful_data' in st.session_state and not st.session_state['last_successful_data'].empty:
         st.warning("⚠️ 警告：無法獲取最新報價，顯示上次成功快取的資料。")
-        # 由於此函數使用了 @st.cache_data，當 return df_all_data 失敗時，
-        # Streamlit 框架會自動返回上一次成功執行時的結果。
-        
-        # 為了強制快取回傳舊值，我們需要確保程式繼續運行，但實際上返回的 DataFrame 已經被快取機制接管。
-        # 此處我們返回一個空 DataFrame，但外部調用者必須意識到這是快取控制的。
-        if 'last_successful_data' not in st.session_state:
-            st.session_state['last_successful_data'] = pd.DataFrame()
         return st.session_state['last_successful_data']
-    
-    # 3. 數據處理 (如果成功獲取新數據)
-    processed_data = []
-
-    for stock_id in stock_list:
-        df_stock = df_all_data[df_all_data['stock_id'] == stock_id].sort_values('date')
         
-        stock_info = STOCK_INFO_MAP.get(stock_id, {"Name": stock_id, "Sector": "未分類"})
-        shares_count = ISSUED_SHARES_MAP.get(stock_id, 1.0) 
-
-        if not df_stock.empty and len(df_stock) >= 1:
-            try:
-                latest = df_stock.iloc[-1]
-                current_price = latest['close']
-                
-                actual_market_cap = current_price * shares_count 
-                
-                change_pct = 0.0
-                if len(df_stock) >= 2:
-                    prev_close = df_stock.iloc[-2]['close']
-                    if prev_close > 0:
-                        change_pct = ((current_price - prev_close) / prev_close) * 100
-                
-                processed_data.append({
-                    "Code": stock_id,
-                    "Name": stock_info['Name'],
-                    "Sector": stock_info['Sector'],
-                    "Size": actual_market_cap,
-                    "Price": current_price,
-                    "ChangePct": round(change_pct, 2),
-                    "LabelInfo": f"{stock_info['Name']}<br>{current_price} ({round(change_pct, 2)}%)"
-                })
-            except Exception:
-                continue
-    
-    df_result = pd.DataFrame(processed_data)
-    # 將成功獲取的最新數據存入 session_state 作為備援
-    st.session_state['last_successful_data'] = df_result
-    return df_result
+    # 4. 首次運行失敗或無快取
+    return pd.DataFrame()
 
 
 # --- 主程式邏輯 ---
@@ -152,9 +149,9 @@ if 'cache_key' not in st.session_state:
     st.session_state['cache_key'] = datetime.datetime.now()
 
 if st.button("強制刷新報價"):
-    # 更改 key，強制 fetch_market_data 重新執行 (即使 API 失敗，也會返回快取)
+    # 更改 key，強制 fetch_market_data 重新執行 
     st.session_state['cache_key'] = datetime.datetime.now()
-    # 清除舊的快取以便嘗試新的 API 請求
+    # 清除 cache_data (會強制嘗試呼叫 API)
     st.cache_data.clear()
 
 # 將 cache_key 傳入函數，讓按鈕可以控制快取刷新
@@ -162,11 +159,11 @@ df = fetch_market_data(STATIC_TOP_50_CODES, st.session_state['cache_key'])
 
 if not df.empty:
     
-    # 確保所有 50 檔股票的標籤資訊都可用
+    # 檢查數據完整性
     missing_stocks = len(STATIC_TOP_50_CODES) - len(df)
-    if missing_stocks > 0:
-        st.error(f"❌ 僅抓取到 {len(df)} 檔股票數據，缺失 {missing_stocks} 檔。顯示可能不完整。")
-    else:
+    if missing_stocks > 0 and 'last_successful_data' in st.session_state:
+        st.error(f"❌ 最新數據僅抓取到 {len(df)} 檔股票數據，但已成功載入 {len(st.session_state['last_successful_data'])} 檔備援數據。")
+    elif missing_stocks == 0:
          st.success(f"✅ 成功顯示 {len(df)} 檔股票數據。")
          
     fig = px.treemap(
