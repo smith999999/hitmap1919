@@ -1,5 +1,5 @@
 streamlit
 pandas
 plotly
-FinMind  # 雖然不再用於抓取股價，但可能還有其他用途，先保留
-yfinance # <-- 新增這一行
+FinMind>=1.3.11
+tqdm
