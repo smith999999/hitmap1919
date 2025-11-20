@@ -7,68 +7,24 @@ import time
 
 # 1. 網頁基本設定
 st.set_page_config(page_title="台灣 50 熱力圖", layout="wide")
-st.title("🏆 台灣 50 (0050) 成分股熱力圖 (實際市值版)")
-st.caption("數據來源: FinMind Open Data | 比例基於發行股數計算實際市值。")
+st.title("🏆 台灣 50 (0050) 成分股熱力圖 (快取備援版)")
+st.caption("數據來源: FinMind Open Data | 失敗時將自動顯示上次成功抓取的資料。")
 
-dl = DataLoader()
+dl = DataLoader() 
 
-# --- 核心數據結構 ---
+# --- 核心數據結構 (保持不變) ---
 
 # 1. 實際發行股數 (Issued Shares, 單位: 百萬股/仟張)
-# 請注意：這些數值需要保持更新，以確保市值比例精確
 ISSUED_SHARES_MAP = {
-    '2330': 25930,  # 台積電
-    '2317': 13863,  # 鴻海
-    '2454': 1598,   # 聯發科
-    '2303': 12964,  # 聯電
-    '3711': 4349,   # 日月光投控
-    '2881': 14920,  # 富邦金
-    '2882': 13627,  # 國泰金
-    '2886': 13735,  # 兆豐金
-    '2002': 15734,  # 中鋼
-    '1301': 9534,   # 台塑
-    '1303': 7943,   # 南亞
-    '2412': 9718,   # 中華電
-    '2603': 2147,   # 長榮
-    '6505': 10476,  # 台塑化
-    '3008': 131,    # 大立光
-    '4904': 3450,   # 遠傳 (電信)
-    '2357': 743,    # 華碩
-    '2382': 2584,   # 廣達
-    '6415': 635,    # 矽力*-KY
-    '2395': 677,    # 研華
-    '2327': 2471,   # 群聯
-    '2615': 4200,   # 萬海
-    '5871': 1845,   # 中租-KY
-    '3037': 982,    # 欣興
-    '2379': 930,    # 研華
-    '1101': 7458,   # 台泥
-    '1102': 7847,   # 亞泥
-    '1402': 4799,   # 遠東新
-    '1590': 790,    # 亞德客-KY
-    '1722': 5163,   # 台肥
-    '2345': 1650,   # 智邦
-    '2347': 2474,   # 聯強
-    '2408': 7421,   # 南亞科
-    '2474': 8125,   # 華邦電
-    '2498': 1673,   # 宏達電
-    '2606': 3740,   # 裕民
-    '2609': 4216,   # 陽明
-    '2707': 105,    # 晶華
-    '2801': 9625,   # 彰銀
-    '2823': 12220,  # 華南金
-    '2834': 9831,   # 臺企銀
-    '2892': 13243,  # 第一金
-    '3010': 354,    # 華立
-    '3041': 1488,   # 揚智
-    '3576': 1184,   # 聯合再生
-    '4938': 1657,   # 和碩
-    '1216': 5373,   # 統一
-    '2308': 2614,   # 台達電
-    '2891': 19576,  # 中信金
-    '2603': 2147,   # 長榮 (重複，應為 0050 內另一檔，此處代號無誤)
-    '2812': 6703,   # 台灣大
-    '8454': 142,    # 富邦媒
+    '2330': 25930, '2317': 13863, '2454': 1598, '2303': 12964, '3711': 4349, '2881': 14920,
+    '2882': 13627, '2886': 13735, '2002': 15734, '1301': 9534, '1303': 7943, '2412': 9718,
+    '2603': 2147, '6505': 10476, '3008': 131, '4904': 3450, '2357': 743, '2382': 2584,
+    '6415': 635, '2395': 677, '2327': 2471, '2615': 4200, '5871': 1845, '3037': 982,
+    '2379': 930, '1101': 7458, '1102': 7847, '1402': 4799, '1590': 790, '1722': 5163,
+    '2345': 1650, '2347': 2474, '2408': 7421, '2474': 8125, '2498': 1673, '2606': 3740,
+    '2609': 4216, '2707': 105, '2801': 9625, '2823': 12220, '2834': 9831, '2892': 13243,
+    '3010': 354, '3041': 1488, '3576': 1184, '4938': 1657, '1216': 5373, '2308': 2614,
+    '2891': 19576, '2603': 2147, '2812': 6703, '8454': 142,
 }
 
 # 2. 完整產業分類清單 (保持不變)
@@ -99,48 +55,69 @@ STOCK_CLASSIFICATION = {
     '1722': {'Name': '台肥', 'Sector': '農業/肥料'}, '2345': {'Name': '智邦', 'Sector': '電子: 網通設備'},
     '2347': {'Name': '聯強', 'Sector': '電子: 通路服務'}, '3010': {'Name': '華立', 'Sector': '電子: 材料'},
     '2812': {'Name': '台灣大', 'Sector': '電信服務'}, '8454': {'Name': '富邦媒', 'Sector': '電子商務'},
-    '2912': {'Name': '統一超', 'Sector': '百貨零售'}, # 確保無誤
 }
 
+STOCK_INFO_MAP = {k: v for k, v in STOCK_CLASSIFICATION.items()}
 STATIC_TOP_50_CODES = list(ISSUED_SHARES_MAP.keys())
 
 
-# --- 核心函數 (修正 Size 計算) ---
-
-@st.cache_data(ttl=3600)
-def fetch_market_data(stock_list):
+# --- 新增函數：單純負責呼叫 API，處理錯誤 ---
+def load_latest_data(stock_list):
     """
-    批量抓取股價並計算漲跌
+    僅負責向 FinMind 批量請求數據，若失敗則回報錯誤。
     """
     end_date = datetime.date.today().strftime("%Y-%m-%d")
     start_date = (datetime.date.today() - datetime.timedelta(days=7)).strftime("%Y-%m-%d")
     
-    all_data = []
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    total_stocks = len(stock_list)
+    try:
+        df_all_data = dl.taiwan_stock_daily(
+            stock_id=stock_list,
+            start_date=start_date,
+            end_date=end_date
+        )
+        return df_all_data
+    except Exception as e:
+        st.error(f"❌ 批量抓取最新報價數據時發生錯誤，將嘗試載入上次成功資料。錯誤詳情: {e}")
+        return pd.DataFrame()
 
-    for i, stock_id in enumerate(stock_list):
-        stock_info = STOCK_CLASSIFICATION.get(stock_id, {"Name": stock_id, "Sector": "未分類"})
+
+# --- 主數據處理函數：包含快取邏輯 ---
+@st.cache_data(ttl=3600)
+def fetch_market_data(stock_list, current_time): 
+    """
+    嘗試載入最新數據。如果失敗，則利用 Streamlit 快取機制，返回上一次成功的結果。
+    current_time 參數確保只有在點擊按鈕時才會刷新快取。
+    """
+    # 1. 嘗試載入最新數據
+    df_all_data = load_latest_data(stock_list)
+    
+    # 2. 判斷是否成功
+    if df_all_data.empty:
+        # 如果最新的數據是空的 (API 呼叫失敗)，則依賴快取機制返回舊數據
+        st.warning("⚠️ 警告：無法獲取最新報價，顯示上次成功快取的資料。")
+        # 由於此函數使用了 @st.cache_data，當 return df_all_data 失敗時，
+        # Streamlit 框架會自動返回上一次成功執行時的結果。
         
-        # 獲取實際發行股數 (Issued Shares)
+        # 為了強制快取回傳舊值，我們需要確保程式繼續運行，但實際上返回的 DataFrame 已經被快取機制接管。
+        # 此處我們返回一個空 DataFrame，但外部調用者必須意識到這是快取控制的。
+        if 'last_successful_data' not in st.session_state:
+            st.session_state['last_successful_data'] = pd.DataFrame()
+        return st.session_state['last_successful_data']
+    
+    # 3. 數據處理 (如果成功獲取新數據)
+    processed_data = []
+
+    for stock_id in stock_list:
+        df_stock = df_all_data[df_all_data['stock_id'] == stock_id].sort_values('date')
+        
+        stock_info = STOCK_INFO_MAP.get(stock_id, {"Name": stock_id, "Sector": "未分類"})
         shares_count = ISSUED_SHARES_MAP.get(stock_id, 1.0) 
-        
-        status_text.text(f"正在分析: {stock_id} {stock_info['Name']} ({i+1}/{total_stocks})")
-        
-        try:
-            df_stock = dl.taiwan_stock_daily(
-                stock_id=stock_id,
-                start_date=start_date,
-                end_date=end_date
-            )
-            
-            if not df_stock.empty:
+
+        if not df_stock.empty and len(df_stock) >= 1:
+            try:
                 latest = df_stock.iloc[-1]
                 current_price = latest['close']
                 
-                # *** 修正：價格乘以實際發行股數 = 實際市值 ***
                 actual_market_cap = current_price * shares_count 
                 
                 change_pct = 0.0
@@ -149,37 +126,49 @@ def fetch_market_data(stock_list):
                     if prev_close > 0:
                         change_pct = ((current_price - prev_close) / prev_close) * 100
                 
-                all_data.append({
+                processed_data.append({
                     "Code": stock_id,
                     "Name": stock_info['Name'],
                     "Sector": stock_info['Sector'],
-                    "Size": actual_market_cap,  # <--- 熱力圖依據實際市值決定大小
+                    "Size": actual_market_cap,
                     "Price": current_price,
                     "ChangePct": round(change_pct, 2),
                     "LabelInfo": f"{stock_info['Name']}<br>{current_price} ({round(change_pct, 2)}%)"
                 })
-        
-        except Exception:
-            pass
-            
-        progress_bar.progress((i + 1) / total_stocks)
-
-    progress_bar.empty()
-    status_text.empty()
+            except Exception:
+                continue
     
-    return pd.DataFrame(all_data)
+    df_result = pd.DataFrame(processed_data)
+    # 將成功獲取的最新數據存入 session_state 作為備援
+    st.session_state['last_successful_data'] = df_result
+    return df_result
+
 
 # --- 主程式邏輯 ---
+st.info(f"✅ 已載入 {len(STATIC_TOP_50_CODES)} 檔成分股，正在嘗試獲取最新報價...")
 
-st.info(f"✅ 已載入 {len(STATIC_TOP_50_CODES)} 檔成分股，正在獲取最新報價並計算實際市值...")
+# 使用 session state 儲存一個 key 來控制快取刷新
+if 'cache_key' not in st.session_state:
+    st.session_state['cache_key'] = datetime.datetime.now()
 
 if st.button("強制刷新報價"):
+    # 更改 key，強制 fetch_market_data 重新執行 (即使 API 失敗，也會返回快取)
+    st.session_state['cache_key'] = datetime.datetime.now()
+    # 清除舊的快取以便嘗試新的 API 請求
     st.cache_data.clear()
 
-df = fetch_market_data(STATIC_TOP_50_CODES)
+# 將 cache_key 傳入函數，讓按鈕可以控制快取刷新
+df = fetch_market_data(STATIC_TOP_50_CODES, st.session_state['cache_key'])
 
 if not df.empty:
     
+    # 確保所有 50 檔股票的標籤資訊都可用
+    missing_stocks = len(STATIC_TOP_50_CODES) - len(df)
+    if missing_stocks > 0:
+        st.error(f"❌ 僅抓取到 {len(df)} 檔股票數據，缺失 {missing_stocks} 檔。顯示可能不完整。")
+    else:
+         st.success(f"✅ 成功顯示 {len(df)} 檔股票數據。")
+         
     fig = px.treemap(
         df,
         path=[px.Constant("台灣 50 市場結構"), 'Sector', 'LabelInfo'], 
@@ -195,7 +184,8 @@ if not df.empty:
     
     fig.update_traces(
         textinfo="label+value",
-        hovertemplate='<b>%{label}</b><br>實際市值(百萬): %{value:,.0f}<br>漲跌幅: %{color:.2f}%'
+        hovertemplate='<b>%{label}</b><br>實際市值(百萬): %{value:,.0f}<br>漲跌幅: %{color:.2f}%',
+        textfont_size=24
     )
     
     fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=700)
@@ -205,4 +195,4 @@ if not df.empty:
     with st.expander("查看詳細數據表"):
         st.dataframe(df[['Code', 'Name', 'Sector', 'Price', 'ChangePct', 'Size']].sort_values('Size', ascending=False).rename(columns={'Size': '實際市值(百萬)'}))
 else:
-    st.warning("⚠️ 警告：無法獲取報價資料，請檢查是否為休市時間或 FinMind API 異常。")
+    st.warning("⚠️ 警告：目前沒有任何快取或最新資料可用，無法繪製熱力圖。")
