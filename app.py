@@ -1,21 +1,22 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from FinMind.data import DataLoader
+# import FinMind only for utility/naming, no longer for daily stock data
+# from FinMind.data import DataLoader 
+import yfinance as yf # 導入新的數據源
 import datetime
 import time
 
 # 1. 網頁基本設定
 st.set_page_config(page_title="台灣 50 熱力圖", layout="wide")
-st.title("🏆 台灣 50 (0050) 成分股熱力圖 (快取備援版)")
-# 確保標題修正，避免誤導
-st.caption("數據來源: FinMind Open Data | 失敗時將自動顯示上次成功抓取的資料。")
+st.title("🏆 台灣 50 (0050) 成分股熱力圖 (YFinance 穩定版)")
+st.caption("數據來源: YFinance (解決 FinMind 限制問題) | 數據將優先完整顯示。")
 
-dl = DataLoader() 
+# FinMind DataLoader 已不再用於獲取每日股價，所以不需要初始化
 
-# --- 核心數據結構 (保持不變) ---
+# --- 核心數據結構 (為配合 YFinance 格式，略作調整) ---
 
-# 1. 實際發行股數 (Issued Shares, 單位: 百萬股/仟張)
+# 1. 實際發行股數 (Issued Shares, 單位: 百萬股/仟張) - 保持不變
 ISSUED_SHARES_MAP = {
     '2330': 25930, '2317': 13863, '2454': 1598, '2303': 12964, '3711': 4349, '2881': 14920,
     '2882': 13627, '2886': 13735, '2002': 15734, '1301': 9534, '1303': 7943, '2412': 9718,
@@ -27,8 +28,6 @@ ISSUED_SHARES_MAP = {
     '3010': 354, '3041': 1488, '3576': 1184, '4938': 1657, '1216': 5373, '2308': 2614,
     '2891': 19576, '2603': 2147, '2812': 6703, '8454': 142,
 }
-
-# 2. 完整產業分類清單 (保持不變)
 STOCK_CLASSIFICATION = {
     '2330': {'Name': '台積電', 'Sector': '電子: 晶圓代工'}, '2454': {'Name': '聯發科', 'Sector': '電子: IC 設計'},
     '2303': {'Name': '聯電', 'Sector': '電子: 晶圓代工'}, '3711': {'Name': '日月光投控', 'Sector': '電子: 封裝測試'},
@@ -59,73 +58,89 @@ STOCK_CLASSIFICATION = {
 }
 
 STOCK_INFO_MAP = {k: v for k, v in STOCK_CLASSIFICATION.items()}
-STATIC_TOP_50_CODES = list(ISSUED_SHARES_MAP.keys())
+STATIC_TW_CODES = list(ISSUED_SHARES_MAP.keys())
+# 將代碼轉換為 YFinance 格式 (例如: '2330.TW')
+YF_STOCK_CODES = [f"{code}.TW" for code in STATIC_TW_CODES]
 
 
-# --- 獨立函數：單純負責呼叫 API，處理錯誤 ---
-def load_latest_data(stock_list):
+# --- 獨立函數：使用 yfinance 批量抓取 ---
+def load_latest_data_yf(yf_stock_list):
     """
-    僅負責向 FinMind 批量請求數據，若失敗則回報錯誤。
+    使用 YFinance 批量抓取數據，並轉換成適合的格式。
     """
-    end_date = datetime.date.today().strftime("%Y-%m-%d")
-    start_date = (datetime.date.today() - datetime.timedelta(days=7)).strftime("%Y-%m-%d")
+    end_date = datetime.date.today()
+    start_date = end_date - datetime.timedelta(days=7) # 抓取一周數據確保能計算昨收
+
+    status_text = st.empty()
+    status_text.text(f"🚀 正在向 YFinance 請求 {len(yf_stock_list)} 檔股票的最新數據...")
     
     try:
-        df_all_data = dl.taiwan_stock_daily(
-            stock_id=stock_list,
-            start_date=start_date,
-            end_date=end_date
+        # YFinance 批量抓取數據
+        df_all_data = yf.download(
+            tickers=yf_stock_list,
+            start=start_date.strftime("%Y-%m-%d"),
+            end=end_date.strftime("%Y-%m-%d"),
+            interval="1d",
+            progress=False
         )
+        
+        status_text.text("✅ 數據已接收，正在計算市值和漲跌幅...")
+        status_text.empty()
         return df_all_data
+        
     except Exception as e:
-        # 顯示錯誤，但返回空 DataFrame
-        st.error(f"❌ 批量抓取最新報價數據時發生錯誤，將嘗試載入上次成功資料。錯誤詳情: {e}")
+        st.error(f"❌ YFinance 批量抓取報價數據時發生錯誤，將嘗試載入上次成功資料。錯誤詳情: {e}")
+        status_text.empty()
         return pd.DataFrame()
 
 
 # --- 主數據處理函數：包含快取邏輯 ---
 @st.cache_data(ttl=3600)
-def fetch_market_data(stock_list, current_time): 
+def fetch_market_data(yf_stock_list, tw_codes, current_time): 
     """
     嘗試載入最新數據。如果失敗，則從 st.session_state 載入上一次成功的結果。
     """
     # 1. 嘗試載入最新數據
-    df_all_data = load_latest_data(stock_list)
+    df_all_data = load_latest_data_yf(yf_stock_list)
     
     # 2. 數據處理 (如果成功獲取新數據)
     if not df_all_data.empty:
         processed_data = []
-
-        for stock_id in stock_list:
-            df_stock = df_all_data[df_all_data['stock_id'] == stock_id].sort_values('date')
-            
-            stock_info = STOCK_INFO_MAP.get(stock_id, {"Name": stock_id, "Sector": "未分類"})
+        
+        for stock_id in tw_codes:
+            yf_code = f"{stock_id}.TW"
             shares_count = ISSUED_SHARES_MAP.get(stock_id, 1.0) 
+            stock_info = STOCK_INFO_MAP.get(stock_id, {"Name": stock_id, "Sector": "未分類"})
+            
+            # 從 YFinance 獲取單檔股票的數據
+            if ('Close', yf_code) in df_all_data.columns:
+                df_stock_close = df_all_data['Close'][yf_code].dropna()
+                df_stock_prev = df_all_data['Adj Close'][yf_code].dropna() # 調整收盤價通常用於計算漲跌
 
-            if not df_stock.empty and len(df_stock) >= 1:
-                try:
-                    latest = df_stock.iloc[-1]
-                    current_price = latest['close']
-                    
-                    actual_market_cap = current_price * shares_count 
-                    
-                    change_pct = 0.0
-                    if len(df_stock) >= 2:
-                        prev_close = df_stock.iloc[-2]['close']
-                        if prev_close > 0:
-                            change_pct = ((current_price - prev_close) / prev_close) * 100
-                    
-                    processed_data.append({
-                        "Code": stock_id,
-                        "Name": stock_info['Name'],
-                        "Sector": stock_info['Sector'],
-                        "Size": actual_market_cap,
-                        "Price": current_price,
-                        "ChangePct": round(change_pct, 2),
-                        "LabelInfo": f"{stock_info['Name']}<br>{current_price} ({round(change_pct, 2)}%)"
-                    })
-                except Exception:
-                    continue
+                if len(df_stock_close) >= 1:
+                    try:
+                        current_price = df_stock_close.iloc[-1]
+                        
+                        actual_market_cap = current_price * shares_count 
+                        
+                        change_pct = 0.0
+                        if len(df_stock_prev) >= 2:
+                            prev_close = df_stock_prev.iloc[-2]
+                            if prev_close > 0:
+                                # 使用最後一個 Close 計算漲跌幅
+                                change_pct = ((current_price - prev_close) / prev_close) * 100
+                        
+                        processed_data.append({
+                            "Code": stock_id,
+                            "Name": stock_info['Name'],
+                            "Sector": stock_info['Sector'],
+                            "Size": actual_market_cap,
+                            "Price": current_price,
+                            "ChangePct": round(change_pct, 2),
+                            "LabelInfo": f"{stock_info['Name']}<br>{current_price:.2f} ({round(change_pct, 2)}%)"
+                        })
+                    except Exception:
+                        continue # 數據不完整則跳過
         
         df_result = pd.DataFrame(processed_data)
         # 成功後儲存到 session state 作為備援
@@ -142,29 +157,27 @@ def fetch_market_data(stock_list, current_time):
 
 
 # --- 主程式邏輯 ---
-st.info(f"✅ 已載入 {len(STATIC_TOP_50_CODES)} 檔成分股，正在嘗試獲取最新報價...")
+st.info(f"✅ 已載入 {len(STATIC_TW_CODES)} 檔成分股，正在嘗試獲取最新報價...")
 
-# 使用 session state 儲存一個 key 來控制快取刷新
 if 'cache_key' not in st.session_state:
     st.session_state['cache_key'] = datetime.datetime.now()
 
 if st.button("強制刷新報價"):
-    # 更改 key，強制 fetch_market_data 重新執行 
     st.session_state['cache_key'] = datetime.datetime.now()
-    # 清除 cache_data (會強制嘗試呼叫 API)
     st.cache_data.clear()
 
-# 將 cache_key 傳入函數，讓按鈕可以控制快取刷新
-df = fetch_market_data(STATIC_TOP_50_CODES, st.session_state['cache_key'])
+df = fetch_market_data(YF_STOCK_CODES, STATIC_TW_CODES, st.session_state['cache_key'])
 
 if not df.empty:
     
-    # 檢查數據完整性
-    missing_stocks = len(STATIC_TOP_50_CODES) - len(df)
+    missing_stocks = len(STATIC_TW_CODES) - len(df)
     if missing_stocks > 0 and 'last_successful_data' in st.session_state:
         st.error(f"❌ 最新數據僅抓取到 {len(df)} 檔股票數據，但已成功載入 {len(st.session_state['last_successful_data'])} 檔備援數據。")
     elif missing_stocks == 0:
          st.success(f"✅ 成功顯示 {len(df)} 檔股票數據。")
+         
+    # 確保 size 不為 0，避免 Treemap 崩潰
+    df = df[df['Size'] > 0] 
          
     fig = px.treemap(
         df,
